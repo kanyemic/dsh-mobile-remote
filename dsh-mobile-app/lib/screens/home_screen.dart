@@ -303,9 +303,8 @@ class _HomeScreenState extends State<HomeScreen>
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: DshColors.bg(context),
+                          color: line,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: line),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
