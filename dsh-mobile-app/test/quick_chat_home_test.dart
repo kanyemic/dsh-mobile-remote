@@ -83,9 +83,6 @@ void main() {
       final recorded = <Map<String, dynamic>>[];
       var sentText = '';
       var failCreate = false;
-      final previousApi = api;
-      addTearDown(() => api = previousApi);
-
       final client = Api(
         client: MockClient((request) async {
           if (request.url.path == '/m/api/sessions' &&
@@ -147,7 +144,6 @@ void main() {
         ..baseUrl = 'http://quick.test'
         ..path = '/m'
         ..token = '';
-      api = client;
 
       final store = AppStore()
         ..catalog = _catalogWith()

@@ -303,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen>
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
-                          color: DshColors.surface2(context),
+                          color: DshColors.bg(context),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: line),
                         ),
