@@ -34,8 +34,9 @@ Map<String, dynamic> buildQuickSessionPayload({
     if (ws.isNotEmpty) {
       final selected = store.workspacePath;
       if (selected != null) {
+        final normSelected = AppStore.normPath(selected);
         for (final w in ws) {
-          if (AppStore.normPath(w['path'] as String? ?? '') == selected) {
+          if (AppStore.normPath(w['path'] as String? ?? '') == normSelected) {
             cwd = w['path'] as String?;
             break;
           }
@@ -152,6 +153,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (text.isEmpty || _creatingQuickChat) return;
     setState(() => _creatingQuickChat = true);
     final msgr = ScaffoldMessenger.of(context);
+    msgr.hideCurrentSnackBar();
     try {
       final store = widget.store;
       var cat = store.catalog;

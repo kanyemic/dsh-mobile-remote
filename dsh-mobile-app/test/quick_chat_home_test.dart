@@ -186,7 +186,9 @@ void main() {
         '先帮我看下日志',
       );
 
-      // 2. 成功时静默建会话（带 confirmDanger: true）并进 ChatScreen 发送
+      // 2. 提示条收起后再次发送：静默建会话（带 confirmDanger: true）并进 ChatScreen 发送
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
       failCreate = false;
       await tester.tap(find.byKey(const ValueKey('home-quick-composer-send')));
       await tester.pumpAndSettle();
