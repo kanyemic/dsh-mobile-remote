@@ -27,7 +27,6 @@ import 'screens/home_screen.dart';
 import 'screens/sessions_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/notifications_screen.dart';
-import 'screens/sheets.dart';
 import 'screens/usage_screen.dart';
 import 'screens/update_screen.dart';
 
@@ -655,6 +654,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
   int _index = 0;
   bool _reconfiguring = false; // 重新配置进行中：显示连接页但保留旧配置，取消可回退
   final _drawerKey = GlobalKey<ScaffoldState>();
+  final _homeComposerFocus = FocusNode();
 
   @override
   void initState() {
@@ -663,6 +663,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
     // 全局状态变化（工作区切换、未读数、连接状态等）→ 重建自身（含抽屉），
     // 否则 const RootScreen 会被父级重建跳过，抽屉里的工作区选中态不会跟着变。
     store.addListener(_onStore);
+    store.onNewChatRequested = _focusHomeNewChat;
     _configured = api.baseUrl.isNotEmpty && api.token.isNotEmpty;
     if (_configured) {
       _boot();
@@ -715,6 +716,10 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    if (store.onNewChatRequested == _focusHomeNewChat) {
+      store.onNewChatRequested = null;
+    }
+    _homeComposerFocus.dispose();
     store.removeListener(_onStore);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -758,13 +763,16 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
     setState(() => _reconfiguring = true);
   }
 
-  void _openNewSession() {
-    showNewSessionSheet(context, store, (id) async {
-      // Phase 2(A4)：openChat 内统一 setSession+refreshSessionConfig+push，这里只刷列表
-      store.refreshSessions();
-      if (!mounted) return;
-      await openChat(context, store, id);
+  void _focusHomeNewChat() {
+    if (!mounted) return;
+    setState(() => _index = 0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _homeComposerFocus.requestFocus();
     });
+  }
+
+  void _openNewSession() {
+    _focusHomeNewChat();
   }
 
   @override
@@ -970,6 +978,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
             HomeScreen(
               store: store,
               visible: _index == 0,
+              composerFocusNode: _homeComposerFocus,
               onOpenSession: () {
                 if (mounted) setState(() {});
               },

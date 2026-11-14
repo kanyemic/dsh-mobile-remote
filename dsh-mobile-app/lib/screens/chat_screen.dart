@@ -171,6 +171,7 @@ Future<void> openChat(
   BuildContext context,
   AppStore store,
   String sessionId, {
+  String? initialSend,
   VoidCallback? onTitleChanged,
   Future<void> Function()? onReturn,
   Api? apiClient,
@@ -182,6 +183,7 @@ Future<void> openChat(
     MaterialPageRoute(
       builder: (_) => ChatScreen(
         store: store,
+        initialSend: initialSend,
         onTitleChanged: onTitleChanged ?? () {},
         apiClient: apiClient,
       ),
@@ -3934,6 +3936,14 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.add_comment_outlined, size: 20),
+            tooltip: L10n.t('新对话', 'New chat'),
+            onPressed: () {
+              Navigator.of(context).popUntil((r) => r.isFirst);
+              widget.store.onNewChatRequested?.call();
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.more_vert, size: 20),
             tooltip: L10n.t('对话操作', 'Conversation actions'),

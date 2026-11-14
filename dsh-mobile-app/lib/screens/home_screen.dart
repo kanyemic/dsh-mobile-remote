@@ -1,5 +1,6 @@
-// 首页：欢迎 + 最近会话 + 新建会话
+// 首页：欢迎 + 最近会话 + 底部打开即聊输入框（对齐 Codex 移动端）
 import 'package:flutter/material.dart';
+import '../api.dart';
 import '../l10n.dart';
 import '../toast.dart';
 import '../models.dart';
@@ -14,9 +15,49 @@ import 'chat_screen.dart';
 import 'sheets.dart';
 import 'usage_screen.dart';
 
+/// 按当前默认配置构造快速开聊的建会话载荷；若默认权限为 danger-full-access 则直接带
+/// confirmDanger: true（用户已在确认门禁中明确授权，避免每次打开都被风险弹窗拦截）。
+Map<String, dynamic> buildQuickSessionPayload({
+  required AppStore store,
+  Catalog? catalog,
+  String? overrideDir,
+}) {
+  final defaults = catalog?.defaults ?? const <String, dynamic>{};
+  final rawPreset = defaults['agentPreset'] as String?;
+  final preset = (rawPreset != null && rawPreset.isNotEmpty) ? rawPreset : 'standard';
+  final rawPerm = defaults['permissionPreset'] as String?;
+  final perm = (rawPerm != null && rawPerm.isNotEmpty) ? rawPerm : 'workspace-write';
+
+  String? cwd = (overrideDir != null && overrideDir.isNotEmpty) ? overrideDir : null;
+  if (cwd == null) {
+    final ws = store.workspaces;
+    if (ws.isNotEmpty) {
+      final selected = store.workspacePath;
+      if (selected != null) {
+        for (final w in ws) {
+          if (AppStore.normPath(w['path'] as String? ?? '') == selected) {
+            cwd = w['path'] as String?;
+            break;
+          }
+        }
+      }
+      cwd ??= ws.first['path'] as String?;
+    }
+  }
+
+  return <String, dynamic>{
+    'preset': preset,
+    if (cwd != null && cwd.isNotEmpty) 'cwd': cwd,
+    'permissionPreset': perm,
+    if (perm == 'danger-full-access') 'confirmDanger': true,
+  };
+}
+
 class HomeScreen extends StatefulWidget {
   final AppStore store;
   final VoidCallback onOpenSession;
+  final FocusNode? composerFocusNode;
+  final Api? apiClient;
 
   /// 本页当前是否可见（IndexedStack 下三个页面同时活着，需显式告知以暂停动效）。
   final bool visible;
@@ -24,6 +65,8 @@ class HomeScreen extends StatefulWidget {
     super.key,
     required this.store,
     required this.onOpenSession,
+    this.composerFocusNode,
+    this.apiClient,
     this.visible = true,
   });
 
@@ -35,6 +78,12 @@ class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   // v3.0.0 review：新建会话弹层打开中标志（双击防抖）
   bool _openingSheet = false;
+  bool _creatingQuickChat = false;
+  String? _overrideDir;
+  final _quickCtrl = TextEditingController();
+  late final FocusNode _ownedFocus = FocusNode();
+  FocusNode get _effectiveFocus => widget.composerFocusNode ?? _ownedFocus;
+  Api get _api => widget.apiClient ?? api;
   late final SessionIndicatorDriver _indicator;
   bool _reducedMotion = false;
 
@@ -45,6 +94,11 @@ class _HomeScreenState extends State<HomeScreen>
     _indicator = SessionIndicatorDriver(vsync: this)
       ..setVisible(widget.visible);
     widget.store.addListener(_onStore);
+    _quickCtrl.addListener(_onQuickInputChanged);
+  }
+
+  void _onQuickInputChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -65,6 +119,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    _quickCtrl.removeListener(_onQuickInputChanged);
+    _quickCtrl.dispose();
+    _ownedFocus.dispose();
     widget.store.removeListener(_onStore);
     _indicator.dispose();
     super.dispose();
@@ -86,6 +143,220 @@ class _HomeScreenState extends State<HomeScreen>
           widget.store.activeSessions,
         ),
         reducedMotion: _reducedMotion,
+      ),
+    );
+  }
+
+  Future<void> _sendQuickChat() async {
+    final text = _quickCtrl.text.trim();
+    if (text.isEmpty || _creatingQuickChat) return;
+    setState(() => _creatingQuickChat = true);
+    final msgr = ScaffoldMessenger.of(context);
+    try {
+      final store = widget.store;
+      var cat = store.catalog;
+      if (cat == null) {
+        if (widget.apiClient != null) {
+          try {
+            cat = await widget.apiClient!.catalog();
+          } catch (_) {}
+        } else {
+          cat = await store.refreshCatalog();
+        }
+      }
+      if (store.workspaces.isEmpty) {
+        try {
+          final ws = await _api.workspaces();
+          if (ws.isNotEmpty) store.workspaces = ws;
+        } catch (_) {}
+      }
+      final payload = buildQuickSessionPayload(
+        store: store,
+        catalog: cat,
+        overrideDir: _overrideDir,
+      );
+      final created = await _api.createSession(payload);
+      final sid = created['sessionId'] as String;
+      _quickCtrl.clear();
+      _effectiveFocus.unfocus();
+      store.refreshSessions();
+      if (!mounted) return;
+      await openChat(
+        context,
+        store,
+        sid,
+        initialSend: text,
+        onTitleChanged: widget.onOpenSession,
+        onReturn: () => store.refreshSessions(),
+        apiClient: widget.apiClient,
+      );
+    } catch (e) {
+      if (mounted) {
+        showToastAt(msgr, '${L10n.t('发送失败：', 'Failed to send: ')}$e');
+      }
+    } finally {
+      if (mounted) setState(() => _creatingQuickChat = false);
+    }
+  }
+
+  String _quickDefaultsSummary(BuildContext context) {
+    final store = widget.store;
+    final dir = _overrideDir ??
+        store.workspaceTitle ??
+        (store.workspaces.isNotEmpty
+            ? (store.workspaces.first['title'] as String? ??
+                store.workspaces.first['path'] as String? ??
+                '')
+            : '');
+    final dirLabel = dir.isEmpty
+        ? L10n.t('默认目录', 'Default dir')
+        : dir.split('/').where((s) => s.isNotEmpty).lastOrNull ?? dir;
+    final defaults = store.catalog?.defaults;
+    final preset = defaults?['agentPreset'] as String? ?? 'standard';
+    final perm = defaults?['permissionPreset'] as String?;
+    final permLabel = perm == 'danger-full-access'
+        ? L10n.t('完全访问', 'Full')
+        : (perm ?? L10n.t('默认权限', 'Default'));
+    return '$dirLabel · $preset · $permLabel';
+  }
+
+  Widget _buildQuickComposer(BuildContext context) {
+    final surface = DshColors.surface(context);
+    final ink3 = DshColors.ink3(context);
+    final line = DshColors.line(context);
+    final brand = DshColors.brand(context);
+    final hasText = _quickCtrl.text.trim().isNotEmpty;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: Theme.of(context).brightness == Brightness.dark
+                ? DshTheme.shadowDark
+                : DshTheme.shadow,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                key: const ValueKey('home-quick-composer-input'),
+                controller: _quickCtrl,
+                focusNode: _effectiveFocus,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.send,
+                style: const TextStyle(fontSize: 14.5),
+                decoration: InputDecoration(
+                  hintText: L10n.t('输入消息，直接开始对话…', 'Message DSH to start a chat…'),
+                  hintStyle: TextStyle(color: ink3),
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                ),
+                onSubmitted: (_) => _sendQuickChat(),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  InkWell(
+                    key: const ValueKey('home-advanced-new-session'),
+                    onTap: () {
+                      if (_openingSheet) return;
+                      _openingSheet = true;
+                      showNewSessionSheet(context, widget.store, (id) async {
+                        widget.store.refreshSessions();
+                        if (!context.mounted) return;
+                        await openChat(
+                          context,
+                          widget.store,
+                          id,
+                          onTitleChanged: widget.onOpenSession,
+                          onReturn: () => widget.store.refreshSessions(),
+                          apiClient: widget.apiClient,
+                        );
+                      }).whenComplete(() => _openingSheet = false);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: line,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.tune, size: 16, color: ink3),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => showDirPicker(context, widget.store, (path) {
+                        if (mounted) setState(() => _overrideDir = path);
+                      }),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: DshColors.surface2(context),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: line),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.folder_outlined, size: 13, color: ink3),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                _quickDefaultsSummary(context),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 11.5, color: DshColors.ink2(context)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    key: const ValueKey('home-quick-composer-send'),
+                    onTap: (_creatingQuickChat || !hasText) ? null : _sendQuickChat,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: (hasText && !_creatingQuickChat) ? brand : line,
+                        shape: BoxShape.circle,
+                      ),
+                      child: _creatingQuickChat
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Icon(
+                              Icons.arrow_upward_rounded,
+                              size: 18,
+                              color: hasText ? Colors.white : ink3,
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -363,8 +634,8 @@ class _HomeScreenState extends State<HomeScreen>
                                   ),
                                   if (recent.isEmpty)
                                     Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 24),
-                                      child: Center(child: Text(L10n.t('暂无会话，点下方新建', 'No sessions yet, create one below'), style: const TextStyle(color: Colors.grey))),
+                                      padding: const EdgeInsets.symmetric(vertical: 20),
+                                      child: Center(child: Text(L10n.t('暂无历史会话，直接在下方输入开聊', 'No recent sessions yet — type below to start chatting'), style: const TextStyle(color: Colors.grey))),
                                     )
                                   else
                                     // 恰好完整显示 3 行（约 3×52+分隔线），第 4 行露边提示可滑动
@@ -390,26 +661,8 @@ class _HomeScreenState extends State<HomeScreen>
                               ),
                             ),
                           ),
-                          const SizedBox(height: 16),
-                          // 新建会话
-                          FilledButton(
-                            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
-                            // v3.0.0 review：双击防抖——连点会并行弹出两个新建会话弹层
-                            onPressed: () {
-                              if (_openingSheet) return;
-                              _openingSheet = true;
-                              showNewSessionSheet(context, store, (id) async {
-                                // Phase 2(A4)：openChat 内统一 setSession+refreshSessionConfig+push，这里只刷列表
-                                store.refreshSessions();
-                                if (!context.mounted) return;
-                                await openChat(context, store, id,
-                                    onTitleChanged: widget.onOpenSession);
-                              }).whenComplete(() => _openingSheet = false);
-                            },
-                            child: Text(L10n.t('＋ 新建会话', '+ New Session')),
-                          ),
                           if (bigFish) ...[
-                            const SizedBox(height: 16),
+                            const SizedBox(height: 14),
                             Center(
                               child: Text(
                                 L10n.t(
@@ -429,6 +682,7 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
         ),
+        _buildQuickComposer(context),
       ],
     );
     if (!bigFish) return body;

@@ -1,0 +1,39 @@
+name: Build Quick-Chat APK
+on:
+  push:
+    branches: [feat/quick-chat-home]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0'
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - working-directory: dsh-mobile-app
+        run: flutter pub get --enforce-lockfile
+      - working-directory: dsh-mobile-app
+        run: flutter analyze
+      - working-directory: dsh-mobile-app
+        run: flutter test
+      - working-directory: dsh-mobile-app
+        run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-remote-apk
+          path: dsh-mobile-app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error

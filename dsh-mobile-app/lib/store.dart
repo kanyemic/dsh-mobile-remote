@@ -221,6 +221,7 @@ class AppStore extends ChangeNotifier {
   }
 
   VoidCallback? onSessionsChanged; // 标题/预设变化 → 外部刷新
+  VoidCallback? onNewChatRequested; // 聊天页/抽屉触发返回首页并聚焦新对话输入框
 
   /// 新增未读通知回调（横幅提示用）：参数 = 新增条数；force=true 时绕过 10 秒防抖
   /// （v2.7.1：悬浮球跳转/回前台时"错过的也提醒"）。
