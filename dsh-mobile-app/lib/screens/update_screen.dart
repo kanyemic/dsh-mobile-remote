@@ -7,8 +7,9 @@ import '../api.dart';
 import '../app_updates.dart';
 
 class UpdateScreen extends StatefulWidget {
-  const UpdateScreen({super.key, this.apiClient});
+  const UpdateScreen({super.key, this.apiClient, this.manifestUrl});
   final Api? apiClient;
+  final String? manifestUrl;
   @override
   State<UpdateScreen> createState() => _UpdateScreenState();
 }
@@ -17,9 +18,13 @@ class _UpdateScreenState extends State<UpdateScreen> {
   Api get client => widget.apiClient ?? api;
   Map<String, dynamic> status = {};
   bool busy = false;
+  bool checkingSelf = false;
   String message = '', appVersion = '', downloadedPath = '';
+  String selfMessage = '';
   double? progress;
   PairedAppRelease? release;
+  PairedAppRelease? selfRelease;
+  int _installedBuild = 0;
   Timer? poll;
 
   @override
@@ -29,9 +34,11 @@ class _UpdateScreenState extends State<UpdateScreen> {
       PackageInfo.fromPlatform()
           .then((info) {
             if (mounted) {
-              setState(
-                () => appVersion = '${info.version}+${info.buildNumber}',
-              );
+              setState(() {
+                appVersion = '${info.version}+${info.buildNumber}';
+                _installedBuild = int.tryParse(info.buildNumber) ?? 0;
+              });
+              unawaited(checkSelfUpdate(silent: true));
             }
           })
           .catchError((_) {}),
@@ -39,6 +46,55 @@ class _UpdateScreenState extends State<UpdateScreen> {
     unawaited(refresh());
     poll = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!busy) unawaited(refresh());
+    });
+  }
+
+  Future<void> checkSelfUpdate({bool silent = false}) async {
+    if (checkingSelf) return;
+    setState(() {
+      checkingSelf = true;
+      if (!silent) selfMessage = '';
+    });
+    try {
+      final next = await fetchSelfUpdateRelease(
+        client,
+        manifestUrl: widget.manifestUrl ?? defaultSelfUpdateManifestUrl,
+      );
+      if (!mounted) return;
+      setState(() {
+        selfRelease = next;
+        selfMessage = next.build > _installedBuild
+            ? '发现新版本 v${next.version}+${next.build}'
+            : '当前客户端已是最新版本';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      if (!silent) {
+        setState(() => selfMessage = '检查自更新失败：$error');
+      }
+    } finally {
+      if (mounted) setState(() => checkingSelf = false);
+    }
+  }
+
+  Future<void> installSelfApp() async {
+    final target = selfRelease;
+    if (target == null) return;
+    await act(() async {
+      final path = await downloadPairedApp(
+        client,
+        target,
+        onProgress: (received, total) {
+          if (mounted) setState(() => progress = received / total);
+        },
+      );
+      final result = await launchAppInstaller(path, target);
+      if (mounted) {
+        setState(() {
+          message = updateMessage(result);
+          selfMessage = updateMessage(result);
+        });
+      }
     });
   }
 
@@ -169,11 +225,74 @@ class _UpdateScreenState extends State<UpdateScreen> {
       'recovery-required': '需要在电脑端恢复安装',
       'failed': '更新未完成',
     };
+    final selfHasUpdate =
+        selfRelease != null && selfRelease!.build > _installedBuild;
     return Scaffold(
       appBar: AppBar(title: const Text('检查更新')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '客户端直连自更新',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 6),
+                  Text('当前版本：App ${appVersion.isEmpty ? "…" : appVersion}'),
+                  if (selfRelease != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      '最新可用：v${selfRelease!.version}+${selfRelease!.build} · '
+                      '${(selfRelease!.size / (1024 * 1024)).toStringAsFixed(1)} MB',
+                    ),
+                    if (selfRelease!.notes != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        selfRelease!.notes!,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                  if (selfMessage.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      selfMessage,
+                      style: TextStyle(
+                        color: selfHasUpdate
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                        fontWeight: selfHasUpdate ? FontWeight.w600 : null,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  if (selfHasUpdate)
+                    FilledButton.icon(
+                      key: const ValueKey('self-update-install-btn'),
+                      onPressed: busy ? null : installSelfApp,
+                      icon: const Icon(Icons.system_update_alt),
+                      label: Text(
+                        '立即下载并覆盖更新 (v${selfRelease!.version}+${selfRelease!.build})',
+                      ),
+                    ),
+                  if (selfHasUpdate) const SizedBox(height: 8),
+                  OutlinedButton(
+                    key: const ValueKey('self-update-check-btn'),
+                    onPressed: (busy || checkingSelf)
+                        ? null
+                        : () => checkSelfUpdate(silent: false),
+                    child: Text(checkingSelf ? '正在检查…' : '检查客户端新版'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           Text(
             'App $appVersion · 电脑插件 ${status['currentVersion'] ?? client.pluginVersion}',
           ),

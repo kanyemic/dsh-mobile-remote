@@ -30,10 +30,65 @@ jobs:
         run: flutter analyze
       - working-directory: dsh-mobile-app
         run: flutter test
-      - working-directory: dsh-mobile-app
-        run: flutter build apk --release
+      - name: Configure personal release signature
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: python3 tools/ci-signing.py
+      - name: Build signed release APK and manifest
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          VERSION_NAME="3.2.4.${RUN_NUMBER}"
+          VERSION_CODE="$((100 + RUN_NUMBER))"
+          (
+            cd dsh-mobile-app
+            flutter build apk --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
+          )
+          mkdir -p release-personal
+          APK_SRC="dsh-mobile-app/build/app/outputs/flutter-apk/app-release.apk"
+          APK_NAME="DSH-Remote-quickchat-v${VERSION_NAME}.apk"
+          cp "$APK_SRC" "release-personal/$APK_NAME"
+
+          APKSIGNER="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/apksigner "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [ -n "$APKSIGNER" ]; then
+            CERT_SHA="$("$APKSIGNER" verify --print-certs "release-personal/$APK_NAME" | awk -F': ' '/certificate SHA-256 digest:/{print tolower($2); exit}')"
+          else
+            CERT_SHA="$(keytool -printcert -jarfile "release-personal/$APK_NAME" | awk -F': ' '/SHA256:/{gsub(":", "", $2); print tolower($2); exit}')"
+          fi
+          echo "cert_sha256=$CERT_SHA"
+          if ! echo "$CERT_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "Invalid certificate SHA-256: $CERT_SHA" >&2
+            exit 1
+          fi
+
+          APK_SIZE="$(wc -c < "release-personal/$APK_NAME" | tr -d ' ')"
+          APK_SHA="$(sha256sum "release-personal/$APK_NAME" | awk '{print $1}')"
+          python3 - <<PY
+          import json, os
+          manifest = {
+              "packageName": "com.dsh.remote",
+              "versionName": "${VERSION_NAME}",
+              "versionCode": int("${VERSION_CODE}"),
+              "size": int("${APK_SIZE}"),
+              "sha256": "${APK_SHA}",
+              "certificateSha256": "${CERT_SHA}",
+              "apkUrl": f"https://dsh.kystation.cn/download/${APK_NAME}",
+              "notes": "打开即聊默认输入框 + 固定签名应用内自更新",
+          }
+          with open("release-personal/app-update.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+          cat release-personal/app-update.json
+      - name: Remove signing material
+        if: always()
+        run: rm -f dsh-mobile-app/android/key.properties dsh-mobile-app/android/ci-release.jks
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-remote-apk
-          path: dsh-mobile-app/build/app/outputs/flutter-apk/app-release.apk
+          path: release-personal/*
           if-no-files-found: error

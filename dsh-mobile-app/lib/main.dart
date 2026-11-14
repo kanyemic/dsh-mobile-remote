@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'l10n.dart';
 import 'api.dart';
+import 'app_updates.dart';
 import 'app_icon_switcher.dart';
 import 'store.dart';
 import 'attention.dart';
@@ -745,6 +746,22 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
     store.onSessionsChanged = () {
       if (mounted) setState(() {});
     };
+    unawaited(_checkSelfUpdateOnBoot());
+  }
+
+  Future<void> _checkSelfUpdateOnBoot() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final installedBuild = int.tryParse(info.buildNumber) ?? 0;
+      final remote = await fetchSelfUpdateRelease(api);
+      if (remote.build > installedBuild) {
+        api.pairedAppBuild = remote.build;
+        api.pairedAppVersion = remote.version;
+        if (mounted) setState(() {});
+      }
+    } catch (_) {
+      // 启动静默检查失败不打扰对话
+    }
   }
 
   void _recheck() {

@@ -1619,19 +1619,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ]),
         _card(L10n.t('关于', 'About'), [
-          if (api.releaseUpdatesSupported)
-            ListTile(
-              leading: const Icon(Icons.system_update),
-              title: const Text('检查更新'),
-              subtitle: Text(
-                api.pairedAppVersion == null
-                    ? '插件与 App 配对更新'
-                    : '配对 App ${api.pairedAppVersion}+${api.pairedAppBuild} 已就绪',
-              ),
-              onTap: () => Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (_) => const UpdateScreen())),
+          ListTile(
+            leading: const Icon(Icons.system_update),
+            title: const Text('检查更新'),
+            subtitle: Text(
+              api.pairedAppVersion == null
+                  ? '应用内下载与覆盖升级（保留全部配置）'
+                  : '发现新版本 ${api.pairedAppVersion}+${api.pairedAppBuild}，点击更新',
             ),
+            onTap: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const UpdateScreen())),
+          ),
 
           _row(
             leading: const Icon(Icons.info_outline),

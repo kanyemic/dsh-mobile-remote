@@ -8,6 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import 'api.dart';
 
 const _installer = MethodChannel('dsh/update');
+const defaultSelfUpdateManifestUrl =
+    'https://dsh.kystation.cn/download/app-update.json';
 
 class PairedAppRelease {
   const PairedAppRelease({
@@ -16,13 +18,17 @@ class PairedAppRelease {
     required this.size,
     required this.hash,
     required this.certificate,
+    this.apkUrl,
+    this.notes,
   });
   final String version, hash, certificate;
   final int build, size;
+  final String? apkUrl, notes;
 
   factory PairedAppRelease.fromJson(Map<String, dynamic> json) {
     final size = json['size'], build = json['versionCode'];
     final hash = json['sha256'], certificate = json['certificateSha256'];
+    final apkUrl = json['apkUrl'], notes = json['notes'];
     if (json['packageName'] != 'com.dsh.remote' ||
         json['versionName'] is! String ||
         size is! int ||
@@ -42,24 +48,55 @@ class PairedAppRelease {
       size: size,
       hash: hash,
       certificate: certificate,
+      apkUrl: apkUrl is String && apkUrl.trim().isNotEmpty
+          ? apkUrl.trim()
+          : null,
+      notes: notes is String && notes.trim().isNotEmpty ? notes.trim() : null,
     );
   }
+}
+
+Uri buildSelfUpdateManifestUri({
+  String manifestUrl = defaultSelfUpdateManifestUrl,
+  int? cacheBusterMs,
+}) {
+  final base = Uri.parse(manifestUrl);
+  final qp = Map<String, String>.from(base.queryParameters);
+  qp['t'] = '${cacheBusterMs ?? DateTime.now().millisecondsSinceEpoch}';
+  return base.replace(queryParameters: qp);
+}
+
+Future<PairedAppRelease> fetchSelfUpdateRelease(
+  Api client, {
+  String manifestUrl = defaultSelfUpdateManifestUrl,
+  int? cacheBusterMs,
+}) async {
+  final json = await client.getExternalJson(
+    buildSelfUpdateManifestUri(
+      manifestUrl: manifestUrl,
+      cacheBusterMs: cacheBusterMs,
+    ),
+  );
+  return PairedAppRelease.fromJson(json);
 }
 
 Future<String> downloadPairedApp(
   Api api,
   PairedAppRelease release, {
   void Function(int received, int total)? onProgress,
+  Future<Directory> Function()? tempDirProvider,
 }) async {
-  final directory = Directory(
-    '${(await getTemporaryDirectory()).path}/updates',
-  );
+  final rootDir = await (tempDirProvider ?? getTemporaryDirectory)();
+  final directory = Directory('${rootDir.path}/updates');
   await directory.create(recursive: true);
   final file = File('${directory.path}/${release.hash}.apk');
   final part = File('${file.path}.part');
   IOSink? sink;
   try {
-    final response = api.openPairedAppDownload();
+    final directUrl = release.apkUrl;
+    final response = (directUrl != null && directUrl.isNotEmpty)
+        ? api.openExternalDownload(Uri.parse(directUrl))
+        : api.openPairedAppDownload();
     var received = 0;
     sink = part.openWrite();
     await sink.addStream(

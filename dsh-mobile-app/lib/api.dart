@@ -119,13 +119,55 @@ class Api implements GitReadApi {
     }
   }
 
+  Stream<List<int>> openExternalDownload(Uri url) async* {
+    final client = _hasInjectedClient ? _client : http.Client();
+    try {
+      final request = http.Request('GET', url);
+      final response = await client
+          .send(request)
+          .timeout(const Duration(seconds: 25));
+      if (response.statusCode != 200) {
+        throw ApiException(
+          '安装包下载失败（HTTP ${response.statusCode}）',
+          code: 'paired-app-not-ready',
+          status: response.statusCode,
+        );
+      }
+      yield* response.stream;
+    } finally {
+      if (!_hasInjectedClient) client.close();
+    }
+  }
+
+  Future<Map<String, dynamic>> getExternalJson(
+    Uri url, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final response = await _client.get(url).timeout(timeout);
+    if (response.statusCode != 200) {
+      throw ApiException(
+        '更新清单请求失败（HTTP ${response.statusCode}）',
+        code: 'update-source-unavailable',
+        status: response.statusCode,
+      );
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('更新清单格式无效');
+    }
+    return decoded;
+  }
+
   /// Same authenticated host across address failover; credentials never enter the ledger.
   String get notificationScope => sha256
       .convert(utf8.encode('${token.isEmpty ? baseUrl : token}\u0000$path'))
       .toString();
   final http.Client _client;
+  final bool _hasInjectedClient;
 
-  Api({http.Client? client}) : _client = client ?? http.Client();
+  Api({http.Client? client})
+    : _client = client ?? http.Client(),
+      _hasInjectedClient = client != null;
 
   String baseUrl = '';
   String token = '';
