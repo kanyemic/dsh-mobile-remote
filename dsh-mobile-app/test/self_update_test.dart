@@ -174,6 +174,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(
+      find.text('检查更新'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('检查更新'), findsOneWidget);
   });
 }
