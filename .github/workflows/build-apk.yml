@@ -53,12 +53,22 @@ jobs:
           APK_NAME="DSH-Remote-quickchat-v${VERSION_NAME}.apk"
           cp "$APK_SRC" "release-personal/$APK_NAME"
 
-          APKSIGNER="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/apksigner "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
+          APKSIGNER="$(ls -d "${ANDROID_SDK_ROOT:-/none}"/build-tools/*/apksigner "${ANDROID_HOME:-/none}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n 1 || true)"
           if [ -n "$APKSIGNER" ]; then
-            CERT_SHA="$("$APKSIGNER" verify --print-certs "release-personal/$APK_NAME" | awk -F': ' '/certificate SHA-256 digest:/{print tolower($2); exit}')"
+            CERT_RAW="$("$APKSIGNER" verify --print-certs "release-personal/$APK_NAME")"
           else
-            CERT_SHA="$(keytool -printcert -jarfile "release-personal/$APK_NAME" | awk -F': ' '/SHA256:/{gsub(":", "", $2); print tolower($2); exit}')"
+            CERT_RAW="$(keytool -printcert -jarfile "release-personal/$APK_NAME")"
           fi
+          CERT_SHA="$(CERT_RAW="$CERT_RAW" python3 -c '
+import os, re
+raw = os.environ["CERT_RAW"]
+m = re.search(r"SHA-256 digest:\s*([0-9a-fA-F]{64})", raw)
+if m:
+    print(m.group(1).lower())
+else:
+    m2 = re.search(r"SHA256:\s*([0-9A-Fa-f:]{95})", raw)
+    print(m2.group(1).replace(":", "").lower() if m2 else "")
+')"
           echo "cert_sha256=$CERT_SHA"
           if ! echo "$CERT_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
             echo "Invalid certificate SHA-256: $CERT_SHA" >&2
