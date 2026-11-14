@@ -168,7 +168,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: SettingsScreen(store: store, onReconfigure: () {}),
+          body: SettingsScreen(store: store, onReconfigure: () async {}),
         ),
       ),
     );
